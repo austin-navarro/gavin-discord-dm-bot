@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Environment variables
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Backups
+backups/
+
+# Unified Execution Log
+.unified-execution-log/
+
+# IDE and editor folders
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build outputs
+dist/
+build/ 
