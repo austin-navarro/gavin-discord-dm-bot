@@ -1,0 +1,13 @@
+[build]
+builder = "nixpacks"
+nixpacksVersion = "1.15.0"
+
+[deploy]
+startCommand = "npm start"
+healthcheckPath = "/"
+healthcheckTimeout = 300
+restartPolicyType = "on-failure"
+restartPolicyMaxRetries = 3
+
+[deploy.envs]
+PORT = "3000" 

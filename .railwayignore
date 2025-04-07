@@ -1,0 +1,26 @@
+# Development files
+node_modules/
+.git/
+.github/
+.vscode/
+.DS_Store
+
+# Environment files (use Railway environment variables instead)
+.env
+.env.local
+
+# Backup and log files
+backups/
+*.log
+
+# Test files
+__tests__/
+test/
+tests/
+
+# Documentation
+docs/
+
+# Temporary files
+tmp/
+temp/ 

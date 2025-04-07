@@ -30,6 +30,7 @@ Create a `.env` file in the root directory with the following variables:
 ```
 DISCORD_TOKEN=your_discord_bot_token
 ADMIN_PASSWORD=your_admin_password
+SESSION_SECRET=your_random_session_secret
 PORT=3000
 DATABASE_URL=your_postgresql_connection_string
 ```
@@ -86,6 +87,28 @@ For production deployment, we recommend:
 1. Hosting the bot on a service like Heroku, Railway, or Render
 2. Using Neon.tech for PostgreSQL hosting
 3. Setting up proper environment variables in your hosting platform
+
+### Railway Deployment Instructions
+
+1. Create a Railway account at [railway.app](https://railway.app)
+
+2. Click "New Project" and select "Deploy from GitHub repo"
+
+3. Connect your GitHub repository
+
+4. Add the following environment variables in the Railway dashboard:
+   - `DISCORD_TOKEN` - Your Discord bot token
+   - `ADMIN_PASSWORD` - Password for admin dashboard access
+   - `SESSION_SECRET` - A long random string for session security
+   - `DATABASE_URL` - Your Neon PostgreSQL connection string
+
+5. Railway will automatically deploy your app with the start command from package.json
+
+6. Once deployed, you can access your web dashboard at the URL provided by Railway
+
+7. If you encounter a TokenInvalid error, verify your DISCORD_TOKEN is correct in Railway environment variables
+
+8. To debug, check the logs in the Railway dashboard
 
 ## Development
 

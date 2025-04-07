@@ -10,9 +10,12 @@ const { conversationOperations } = require('./database');
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Add health check route for Railway
+require('./health-check')(app);
+
 // Session middleware
 app.use(session({
-  secret: process.env.ADMIN_PASSWORD,
+  secret: process.env.SESSION_SECRET || process.env.ADMIN_PASSWORD,
   resave: false,
   saveUninitialized: false
 }));
@@ -443,9 +446,29 @@ app.post('/send-message', requireAuth, async (req, res) => {
 // Function to start the server
 const startServer = (port) => {
   app.listen(port, () => {
-    console.log(`🌐 Web interface running on http://localhost:${port}`);
+    console.log(`
+===============================================
+🚀 Server running on port ${port}
+📱 Web Dashboard: http://localhost:${port}/login
+🤖 Discord Bot ${client.isReady() ? 'is ONLINE' : 'is starting...'}
+🗄️ Database connection: ${pool ? 'ESTABLISHED' : 'CONNECTING...'}
+===============================================
+`);
   });
 };
 
-// Login to Discord with your token
-client.login(process.env.DISCORD_TOKEN);
+// Initialize everything
+loadConversations()
+  .then(() => {
+    console.log('✅ Starting Discord bot...');
+    client.login(process.env.DISCORD_TOKEN)
+      .catch(error => {
+        console.error('❌ Failed to login to Discord. Check your DISCORD_TOKEN:', error.message);
+      });
+    startServer(port);
+  })
+  .catch(error => {
+    console.error('❌ Error initializing application:', error);
+    console.log('Starting server anyway...');
+    startServer(port);
+  });
