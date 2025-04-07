@@ -130,6 +130,45 @@ app.get('/login', (req, res) => {
   res.render('login', { error: null });
 });
 
+// Server-Sent Events (SSE) endpoint for real-time updates
+app.get('/events', requireAuth, (req, res) => {
+  // Set headers for SSE
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive'
+  });
+  
+  // Send an initial ping to establish the connection
+  res.write('event: ping\ndata: connected\n\n');
+  
+  // Function to send updates to the client
+  const sendUpdate = (type, data) => {
+    if (req.closed) return;
+    res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  
+  // Keep track of the client for cleanup
+  const clientId = Date.now();
+  const intervalId = setInterval(() => {
+    sendUpdate('ping', { time: Date.now() });
+  }, 30000); // Keep connection alive with ping every 30 seconds
+  
+  // Store the client in a Map
+  if (!global.sseClients) {
+    global.sseClients = new Map();
+  }
+  global.sseClients.set(clientId, { sendUpdate, res });
+  
+  // Clean up on close
+  req.on('close', () => {
+    clearInterval(intervalId);
+    if (global.sseClients) {
+      global.sseClients.delete(clientId);
+    }
+  });
+});
+
 app.post('/login', (req, res) => {
   if (req.body.password === process.env.ADMIN_PASSWORD) {
     req.session.isAuthenticated = true;
@@ -448,13 +487,22 @@ client.on('messageCreate', async message => {
       
       // Add message to conversation and save to database
       // Pass the Discord.js message timestamp (milliseconds since epoch)
-      await addMessageToConversation(
+      const conversation = await addMessageToConversation(
         message.author.id,
         message.author.username,
         message.content,
         true,
         message.createdTimestamp // Add the Discord timestamp
       );
+      
+      // Broadcast the update to all connected clients
+      broadcastUpdate('newMessage', {
+        userId: message.author.id,
+        username: message.author.username,
+        content: message.content,
+        timestamp: message.createdTimestamp,
+        fromUser: true
+      });
       
       // Echo message to interface channel if set
       if (INTERFACE_CHANNEL_ID) {
@@ -529,6 +577,15 @@ app.post('/send-message', requireAuth, async (req, res) => {
     const username = conversations.has(userId) ? conversations.get(userId).username : 'Unknown';
     await addMessageToConversation(userId, username, message, false, timestamp);
     
+    // Broadcast the update to all connected clients
+    broadcastUpdate('newMessage', {
+      userId,
+      username,
+      content: message,
+      timestamp,
+      fromUser: false
+    });
+    
     // Record stats
     stats.messagesTotal++;
     
@@ -556,6 +613,25 @@ app.post('/send-message', requireAuth, async (req, res) => {
     });
   }
 });
+
+// Function to broadcast updates to all connected SSE clients
+function broadcastUpdate(eventType, data) {
+  if (!global.sseClients || global.sseClients.size === 0) return;
+  
+  if (DEBUG_MODE) {
+    console.log(`Broadcasting ${eventType} to ${global.sseClients.size} clients:`, data);
+  }
+  
+  for (const [clientId, client] of global.sseClients.entries()) {
+    try {
+      client.sendUpdate(eventType, data);
+    } catch (error) {
+      console.error(`Error sending update to client ${clientId}:`, error);
+      // Clean up dead connections
+      global.sseClients.delete(clientId);
+    }
+  }
+}
 
 // Function to start the Express server
 const startServer = (port) => {

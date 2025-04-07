@@ -468,11 +468,12 @@
                                         conversation.messages[conversation.messages.length - 1].fromUser === true;
                     %>
                         <div class="conversation-item <%= conversation.userId === activeUser ? 'active' : '' %> <%= isUnread ? 'unread' : '' %>" 
-                             onclick="window.location.href='/dashboard?userId=<%= conversation.userId %>'">
+                             onclick="window.location.href='/dashboard?userId=<%= conversation.userId %>'"
+                             data-userid="<%= conversation.userId %>">
                             <div class="username">
                                 <%= conversation.username %>
                                 <% if (isUnread) { %>
-                                    <span style="color: var(--primary); font-size: 10px;">NEW</span>
+                                    <span class="new-indicator" style="color: var(--primary); font-size: 10px;">NEW</span>
                                 <% } %>
                             </div>
                             <div class="last-message">
@@ -597,7 +598,159 @@
                     debugChevron.textContent = debugContent.classList.contains('visible') ? '▲' : '▼';
                 });
             }
+            
+            // Setup Server-Sent Events for real-time updates
+            setupRealtimeUpdates();
         });
+        
+        // Function to set up real-time updates using Server-Sent Events
+        function setupRealtimeUpdates() {
+            if (typeof EventSource === 'undefined') {
+                console.error('Your browser does not support Server-Sent Events');
+                return;
+            }
+            
+            const evtSource = new EventSource('/events');
+            
+            // Connection opened
+            evtSource.addEventListener('open', function(e) {
+                console.log('SSE connection established');
+            });
+            
+            // Handle ping events to keep connection alive
+            evtSource.addEventListener('ping', function(e) {
+                // Connection is alive
+            });
+            
+            // Handle new message events
+            evtSource.addEventListener('newMessage', function(e) {
+                const messageData = JSON.parse(e.data);
+                console.log('Received new message:', messageData);
+                
+                // Handle the new message based on active user
+                const activeUserId = '<%= activeUser %>';
+                
+                if (messageData.userId === activeUserId) {
+                    // Add message to current chat if it's for the active user
+                    addMessageToChat(messageData);
+                }
+                
+                // Update the conversation list
+                updateConversationItem(messageData);
+            });
+            
+            // Handle errors
+            evtSource.addEventListener('error', function(e) {
+                console.error('SSE connection error:', e);
+                // Try to reconnect after a delay
+                setTimeout(() => {
+                    console.log('Attempting to reconnect SSE...');
+                    setupRealtimeUpdates();
+                }, 5000);
+            });
+            
+            // Clean up when page unloads
+            window.addEventListener('beforeunload', function() {
+                evtSource.close();
+            });
+        }
+        
+        // Function to add a new message to the chat
+        function addMessageToChat(messageData) {
+            const messagesContainer = document.querySelector('.chat-messages');
+            if (!messagesContainer) return;
+            
+            // Format message time in PST
+            const formatTimePST = (timestamp) => {
+                return new Date(timestamp).toLocaleString('en-US', { 
+                    timeZone: 'America/Los_Angeles',
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: true
+                }) + ' PST';
+            };
+            
+            const timestamp = formatTimePST(messageData.timestamp);
+            const fromClass = messageData.fromUser ? 'from-user' : 'from-bot';
+            const fromName = messageData.fromUser ? messageData.username : 'Bot';
+            
+            const newMessage = document.createElement('div');
+            newMessage.className = `message ${fromClass}`;
+            
+            newMessage.innerHTML = `
+                <div class="message-header">
+                    <span>${fromName}</span>
+                    <span class="timestamp">${timestamp}</span>
+                </div>
+                <div class="message-bubble">
+                    <div class="message-content">${messageData.content}</div>
+                </div>
+            `;
+            
+            messagesContainer.appendChild(newMessage);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+        
+        // Function to update or add an item in the conversation list
+        function updateConversationItem(messageData) {
+            const conversationList = document.querySelector('.conversations-list');
+            if (!conversationList) return;
+            
+            // Check if the conversation item already exists
+            let item = conversationList.querySelector(`.conversation-item[data-userid="${messageData.userId}"]`);
+            
+            if (item) {
+                // Update existing item
+                const lastMessageElem = item.querySelector('.last-message');
+                const timestampElem = item.querySelector('.timestamp');
+                
+                if (lastMessageElem) {
+                    lastMessageElem.textContent = messageData.content.substring(0, 40) + 
+                        (messageData.content.length > 40 ? '...' : '');
+                }
+                
+                if (timestampElem) {
+                    timestampElem.textContent = new Date(messageData.timestamp).toLocaleString('en-US', {
+                        timeZone: 'America/Los_Angeles',
+                        dateStyle: 'medium',
+                        timeStyle: 'short'
+                    }) + ' PST';
+                }
+                
+                // If it's a user message, mark as unread
+                if (messageData.fromUser) {
+                    item.classList.add('unread');
+                    const username = item.querySelector('.username');
+                    if (username && !username.querySelector('.new-indicator')) {
+                        const newIndicator = document.createElement('span');
+                        newIndicator.className = 'new-indicator';
+                        newIndicator.style.color = 'var(--primary)';
+                        newIndicator.style.fontSize = '10px';
+                        newIndicator.textContent = ' NEW';
+                        username.appendChild(newIndicator);
+                    }
+                } else {
+                    // Bot's reply, no need for unread indicator
+                    item.classList.remove('unread');
+                    const newIndicator = item.querySelector('.new-indicator');
+                    if (newIndicator) {
+                        newIndicator.remove();
+                    }
+                }
+                
+                // Move the item to the top of the list
+                conversationList.insertBefore(item, conversationList.firstChild);
+            } else {
+                // We received a message for a user not in the list
+                // This is rare, but we should handle it by refreshing the page
+                // to get the full updated list from the server
+                location.reload();
+            }
+        }
 
         document.addEventListener('DOMContentLoaded', function() {
             // Handle reply form submission
@@ -637,40 +790,13 @@
                             // Clear the input field
                             replyInput.value = '';
                             
-                            // Add the message to the UI without refreshing
+                            // We no longer need to manually add the message to UI here
+                            // The SSE event will handle adding the message with consistent formatting
+                            // Just scroll to bottom to ensure visibility
                             const messagesContainer = document.querySelector('.chat-messages');
-                            const newMessage = document.createElement('div');
-                            newMessage.className = 'message from-bot'; // Bot messages appear on right
-                            
-                            // Format the current time in PST
-                            const formatTimePST = (date) => {
-                                return date.toLocaleString('en-US', { 
-                                    timeZone: 'America/Los_Angeles',
-                                    year: 'numeric',
-                                    month: 'short',
-                                    day: 'numeric',
-                                    hour: '2-digit',
-                                    minute: '2-digit',
-                                    second: '2-digit',
-                                    hour12: true
-                                }) + ' PST';
-                            };
-                            
-                            const now = new Date();
-                            const timestamp = formatTimePST(now);
-                            
-                            newMessage.innerHTML = `
-                                <div class="message-header">
-                                    <span>Bot</span>
-                                    <span class="timestamp">${timestamp}</span>
-                                </div>
-                                <div class="message-bubble">
-                                    <div class="message-content">${content}</div>
-                                </div>
-                            `;
-                            
-                            messagesContainer.appendChild(newMessage);
-                            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                            if (messagesContainer) {
+                                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                            }
                         } else {
                             alert('Failed to send message: ' + (result.error || 'Unknown error'));
                         }
