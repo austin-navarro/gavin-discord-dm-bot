@@ -108,6 +108,82 @@ const conversationOperations = {
     }
   },
 
+  // Fix timestamps in the database (convert any non-numeric values to numeric)
+  fixTimestamps: async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      
+      // Set a default timestamp (current time)
+      const defaultTimestamp = Date.now();
+      console.log('Running timestamp fix with default value:', defaultTimestamp);
+      
+      // First check schema types to ensure they're properly set as BIGINT
+      console.log('Checking database schema...');
+      try {
+        // Try to alter column types if they're not already BIGINT
+        await client.query(`
+          ALTER TABLE users 
+          ALTER COLUMN last_activity TYPE BIGINT 
+          USING (CASE 
+            WHEN last_activity::text ~ '^[0-9]+$' THEN last_activity::BIGINT
+            ELSE ${defaultTimestamp}::BIGINT
+          END);
+        `);
+        
+        await client.query(`
+          ALTER TABLE messages 
+          ALTER COLUMN timestamp TYPE BIGINT 
+          USING (CASE 
+            WHEN timestamp::text ~ '^[0-9]+$' THEN timestamp::BIGINT
+            ELSE ${defaultTimestamp}::BIGINT
+          END);
+        `);
+        console.log('Schema updated to ensure timestamps are stored as BIGINT');
+      } catch (schemaError) {
+        console.error('Schema update error (may be already correct):', schemaError);
+        // Continue with fixing values
+      }
+      
+      console.log('Fixing user last_activity timestamps...');
+      // Update users table for any null or invalid timestamps
+      const userResult = await client.query(`
+        UPDATE users 
+        SET last_activity = $1 
+        WHERE last_activity IS NULL OR 
+              last_activity <= 0 OR 
+              last_activity::text !~ '^[0-9]+$'
+        RETURNING user_id, last_activity
+      `, [defaultTimestamp]);
+      console.log(`Fixed ${userResult.rowCount} user timestamps`);
+      
+      console.log('Fixing message timestamps...');
+      // Update messages table for any null or invalid timestamps
+      const messageResult = await client.query(`
+        UPDATE messages 
+        SET timestamp = $1 
+        WHERE timestamp IS NULL OR 
+              timestamp <= 0 OR 
+              timestamp::text !~ '^[0-9]+$'
+        RETURNING id, timestamp
+      `, [defaultTimestamp]);
+      console.log(`Fixed ${messageResult.rowCount} message timestamps`);
+      
+      await client.query('COMMIT');
+      console.log('✅ Timestamp migration complete');
+      return {
+        usersFixed: userResult.rowCount,
+        messagesFixed: messageResult.rowCount
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('❌ Error fixing timestamps:', error);
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+
   // Get a full conversation by user ID
   getConversationByUserId: async (userId) => {
     try {

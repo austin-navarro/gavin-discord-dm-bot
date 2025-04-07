@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS users (
   user_id TEXT PRIMARY KEY,
   username TEXT NOT NULL,
-  last_activity BIGINT,
+  last_activity BIGINT, -- Explicitly using BIGINT for timestamp (milliseconds since epoch)
   last_message TEXT
 );
 
@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS messages (
   id SERIAL PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
   content TEXT NOT NULL,
-  timestamp BIGINT NOT NULL,
+  timestamp BIGINT NOT NULL, -- Explicitly using BIGINT for timestamp (milliseconds since epoch)
   from_user BOOLEAN NOT NULL DEFAULT FALSE,
   
   -- Index for efficient querying

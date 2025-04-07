@@ -4,7 +4,7 @@ const express = require('express');
 const session = require('express-session');
 const bodyParser = require('body-parser');
 const path = require('path');
-const { conversationOperations } = require('./database');
+const { conversationOperations, pool } = require('./database');
 
 // Express app setup
 const app = express();
@@ -95,6 +95,15 @@ function logConversationState(userId) {
 // Function to load conversations from PostgreSQL
 async function loadConversations() {
   try {
+    // First, try to fix any invalid timestamps in the database
+    try {
+      await conversationOperations.fixTimestamps();
+      console.log('✅ Timestamp fix complete');
+    } catch (error) {
+      console.error('❌ Error fixing timestamps:', error);
+      // Continue anyway - we'll try to load what we can
+    }
+    
     const allUsers = await conversationOperations.getAllConversations();
     
     // Reset the conversations Map
@@ -130,6 +139,16 @@ app.post('/login', (req, res) => {
   }
 });
 
+// Logout route
+app.post('/logout', (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      console.error('Error destroying session:', err);
+    }
+    res.redirect('/login');
+  });
+});
+
 app.get('/dashboard', requireAuth, async (req, res) => {
   try {
     if (DEBUG_MODE) {
@@ -146,11 +165,11 @@ app.get('/dashboard', requireAuth, async (req, res) => {
           username: sampleConv.username,
           messageCount: sampleConv.messages.length,
           lastMessage: sampleConv.lastMessage,
-          lastActivity: new Date(sampleConv.lastActivity).toLocaleString(),
+          lastActivity: new Date(sampleConv.lastActivity).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }),
           messages: sampleConv.messages.map(m => ({
             content: m.content,
             fromUser: m.fromUser,
-            timestamp: new Date(m.timestamp).toLocaleString()
+            timestamp: new Date(m.timestamp).toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })
           }))
         });
       }
@@ -173,14 +192,63 @@ app.get('/dashboard', requireAuth, async (req, res) => {
     // Reload conversations from database to ensure fresh data
     await loadConversations();
     
+    // Helper function to format date in PST
+    const formatDatePST = (timestamp) => {
+      if (!timestamp) return 'No date';
+      
+      try {
+        // Ensure timestamp is a number (milliseconds since epoch)
+        let numericTimestamp;
+        
+        if (typeof timestamp === 'string') {
+          // Try to parse string to number
+          numericTimestamp = parseInt(timestamp, 10);
+        } else if (typeof timestamp === 'number') {
+          // Already a number
+          numericTimestamp = timestamp;
+        } else {
+          // Invalid type
+          throw new Error(`Invalid timestamp type: ${typeof timestamp}`);
+        }
+        
+        // Validate the timestamp is reasonable (between 2020-01-01 and 2030-01-01)
+        // This helps catch common errors without breaking the app
+        const minValidTimestamp = 1577836800000; // 2020-01-01
+        const maxValidTimestamp = 1893456000000; // 2030-01-01
+        
+        if (isNaN(numericTimestamp) || 
+            numericTimestamp < minValidTimestamp || 
+            numericTimestamp > maxValidTimestamp) {
+          console.error(`Invalid timestamp value: ${timestamp}, normalized to: ${numericTimestamp}`);
+          return 'Invalid Date';
+        }
+        
+        // Format the date in PST
+        return new Date(numericTimestamp).toLocaleString('en-US', { 
+          timeZone: 'America/Los_Angeles',
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true
+        }) + ' PST';
+      } catch (e) {
+        console.error('Date formatting error:', e, 'Original timestamp:', timestamp);
+        return 'Invalid Date';
+      }
+    };
+    
     // Convert conversations Map to array and sort by last activity
     const conversationsList = Array.from(conversations.values())
       .sort((a, b) => b.lastActivity - a.lastActivity)
       .map(conv => ({
         ...conv,
+        lastActivityFormatted: formatDatePST(conv.lastActivity),
         messages: conv.messages.map(msg => ({
           ...msg,
-          timestamp: new Date(msg.timestamp).toLocaleString()
+          timestamp: formatDatePST(msg.timestamp)
         }))
       }));
 
@@ -206,11 +274,11 @@ app.get('/dashboard', requireAuth, async (req, res) => {
         console.log('Active conversation:', activeConv ? {
           messageCount: activeConv.messages.length,
           lastMessage: activeConv.lastMessage,
-          lastActivity: new Date(activeConv.lastActivity).toLocaleString(),
+          lastActivity: formatDatePST(activeConv.lastActivity),
           messages: activeConv.messages.map(m => ({
             content: m.content,
             fromUser: m.fromUser,
-            timestamp: new Date(m.timestamp).toLocaleString()
+            timestamp: formatDatePST(m.timestamp)
           }))
         } : 'Not found');
       }
@@ -221,7 +289,7 @@ app.get('/dashboard', requireAuth, async (req, res) => {
       stats: currentStats,
       messages: messageHistory.map(msg => ({
         ...msg,
-        timestamp: new Date(msg.timestamp).toLocaleString()
+        timestamp: formatDatePST(msg.timestamp)
       })),
       conversations: conversationsList,
       activeUser: activeUser,
@@ -242,9 +310,21 @@ app.get('/dashboard', requireAuth, async (req, res) => {
 });
 
 // Add message to conversation and save to database
-async function addMessageToConversation(userId, username, content, fromUser) {
+async function addMessageToConversation(userId, username, content, fromUser, discordTimestamp = null) {
   try {
-    const timestamp = Date.now();
+    // If a Discord timestamp is provided, use that, otherwise use current time
+    // Discord.js message.createdTimestamp is already a Unix timestamp in milliseconds
+    const timestamp = discordTimestamp || Date.now();
+    
+    if (DEBUG_MODE) {
+      console.log(`Adding message to conversation for user ${userId}:`, {
+        content: content.substring(0, 50) + (content.length > 50 ? '...' : ''),
+        timestamp,
+        formattedDate: new Date(timestamp).toLocaleString('en-US', {
+          timeZone: 'America/Los_Angeles'
+        })
+      });
+    }
     
     // Update in-memory map
     if (!conversations.has(userId)) {
@@ -260,7 +340,7 @@ async function addMessageToConversation(userId, username, content, fromUser) {
     const conversation = conversations.get(userId);
     conversation.messages.push({
       content,
-      timestamp,
+      timestamp, // Store as number for consistent handling
       fromUser
     });
     
@@ -312,7 +392,7 @@ async function setupInterfaceChannel() {
         try {
           channel = await guild.channels.create({
             name: 'bot-messages',
-            type: 0, // Text channel
+            type: 0, // Text channel type in Discord.js v14
             topic: 'Interface for bot messages'
           });
           console.log(`✅ Created new channel: #bot-messages (${channel.id})`);
@@ -343,8 +423,7 @@ client.once('ready', async () => {
   // Set up interface channel
   await setupInterfaceChannel();
   
-  // Start Express server
-  startServer(port);
+  // Don't start Express server here, it's already started at the bottom
 });
 
 // Handle DM messages
@@ -352,18 +431,29 @@ client.on('messageCreate', async message => {
   // Ignore bot's own messages
   if (message.author.id === client.user.id) return;
   
-  // Handle DMs
-  if (message.channel.type === 0) {
+  // Handle DMs - in Discord.js v14, DM channels have type === 1
+  if (message.channel.type === 1) {
     // Record stats
     stats.messagesTotal++;
     
     try {
+      if (DEBUG_MODE) {
+        console.log('Received DM with timestamp details:', {
+          createdTimestamp: message.createdTimestamp,
+          formattedDate: new Date(message.createdTimestamp).toLocaleString('en-US', {
+            timeZone: 'America/Los_Angeles'
+          })
+        });
+      }
+      
       // Add message to conversation and save to database
+      // Pass the Discord.js message timestamp (milliseconds since epoch)
       await addMessageToConversation(
         message.author.id,
         message.author.username,
         message.content,
-        true
+        true,
+        message.createdTimestamp // Add the Discord timestamp
       );
       
       // Echo message to interface channel if set
@@ -391,33 +481,53 @@ client.on('messageCreate', async message => {
 // Message Endpoint
 app.post('/send-message', requireAuth, async (req, res) => {
   try {
+    console.log('Received message request:', req.body);
     const { userId, message } = req.body;
     
     if (!userId || !message) {
-      return res.status(400).json({ error: 'Missing required fields' });
+      console.log('Missing required fields:', { userId, message });
+      return res.status(400).json({ error: 'Missing required fields', details: { userId: !!userId, message: !!message } });
+    }
+    
+    if (!client.isReady()) {
+      console.log('Discord client not ready');
+      return res.status(503).json({ error: 'Discord bot is not ready yet', details: 'The bot is starting or not connected' });
     }
     
     // Get the DM channel
     let dmChannel = dmChannels.get(userId);
+    console.log('Existing DM channel found:', !!dmChannel);
     
     if (!dmChannel) {
       // Try to fetch the user and create DM channel
       try {
+        console.log('Fetching user with ID:', userId);
         const user = await client.users.fetch(userId);
+        console.log('User fetched successfully:', user.tag);
+        
         dmChannel = await user.createDM();
+        console.log('DM channel created:', !!dmChannel);
         dmChannels.set(userId, dmChannel);
       } catch (error) {
         console.error('Error creating DM channel:', error);
-        return res.status(404).json({ error: 'User not found or cannot create DM channel' });
+        return res.status(404).json({ 
+          error: 'User not found or cannot create DM channel', 
+          details: error.message 
+        });
       }
     }
     
     // Send message
+    console.log('Sending message to channel:', dmChannel.id);
     await dmChannel.send(message);
+    console.log('Message sent successfully');
+    
+    // Current timestamp for the message
+    const timestamp = Date.now();
     
     // Add message to conversation and save to database
     const username = conversations.has(userId) ? conversations.get(userId).username : 'Unknown';
-    await addMessageToConversation(userId, username, message, false);
+    await addMessageToConversation(userId, username, message, false, timestamp);
     
     // Record stats
     stats.messagesTotal++;
@@ -427,7 +537,7 @@ app.post('/send-message', requireAuth, async (req, res) => {
       userId,
       username,
       content: message,
-      timestamp: Date.now(),
+      timestamp: timestamp,
       type: 'outgoing'
     });
     
@@ -439,22 +549,49 @@ app.post('/send-message', requireAuth, async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Error sending message:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ 
+      error: error.message,
+      stack: DEBUG_MODE ? error.stack : undefined,
+      details: 'See server logs for more information'
+    });
   }
 });
 
-// Function to start the server
+// Function to start the Express server
 const startServer = (port) => {
-  app.listen(port, () => {
-    console.log(`
+  const actualPort = process.env.PORT || port || 3000;
+  
+  try {
+    // Try to start the server on the preferred port
+    const server = app.listen(actualPort, '0.0.0.0', () => {
+      // Get the public URL from Railway if available
+      const publicDomain = process.env.RAILWAY_PUBLIC_DOMAIN 
+        ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+        : `http://localhost:${actualPort}`;
+        
+      console.log(`
 ===============================================
-🚀 Server running on port ${port}
-📱 Web Dashboard: http://localhost:${port}/login
+🚀 Server running on port ${actualPort}
+📱 Web Dashboard: ${publicDomain}/login
 🤖 Discord Bot ${client.isReady() ? 'is ONLINE' : 'is starting...'}
 🗄️ Database connection: ${pool ? 'ESTABLISHED' : 'CONNECTING...'}
 ===============================================
 `);
-  });
+    });
+
+    // Handle errors
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.log(`⚠️ Port ${actualPort} is already in use. Using fallback approach...`);
+        // In Railway, we let their routing handle this
+        console.log("🔄 Railway should handle port assignment automatically");
+      } else {
+        console.error('❌ Server error:', err);
+      }
+    });
+  } catch (err) {
+    console.error('❌ Failed to start server:', err);
+  }
 };
 
 // Initialize everything

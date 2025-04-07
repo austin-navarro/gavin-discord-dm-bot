@@ -4,10 +4,11 @@ nixpacksVersion = "1.15.0"
 
 [deploy]
 startCommand = "npm start"
-healthcheckPath = "/"
+healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "on-failure"
 restartPolicyMaxRetries = 3
 
-[deploy.envs]
-PORT = "3000" 
+# Let Railway assign the port dynamically
+# [deploy.envs]
+# PORT = "3000" 
