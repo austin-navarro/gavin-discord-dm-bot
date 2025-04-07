@@ -526,6 +526,48 @@ client.on('messageCreate', async message => {
   }
 });
 
+// When a new member joins
+client.on('guildMemberAdd', async member => {
+  try {
+    console.log(`New member joined: ${member.user.username} (${member.user.id})`);
+    
+    // Create a DM channel and send welcome message
+    const dmChannel = await member.user.createDM();
+    const welcomeMessage = `Welcome to ${member.guild.name}, ${member.user.username}! 🎉 Thank you for joining our server. If you have any questions or would like to learn more about our project, feel free to reply to this message.`;
+    await dmChannel.send(welcomeMessage);
+    console.log(`Sent welcome message to ${member.user.username}`);
+    
+    // Store the DM channel for future use
+    dmChannels.set(member.user.id, dmChannel);
+    
+    // Store welcome message in conversation history
+    const timestamp = Date.now();
+    await addMessageToConversation(
+      member.user.id,
+      member.user.username,
+      welcomeMessage,
+      false, // fromUser = false (bot message)
+      timestamp
+    );
+    
+    // Notify in the interface channel
+    if (INTERFACE_CHANNEL_ID) {
+      try {
+        const channel = await client.channels.fetch(INTERFACE_CHANNEL_ID);
+        await channel.send(`### 📥 New Member\n**${member.user.username}** (ID: \`${member.user.id}\`) just joined the server and was sent a welcome message.`);
+      } catch (error) {
+        console.error(`Failed to notify interface channel:`, error);
+      }
+    }
+    
+    // Update stats
+    stats.totalUsers++;
+    
+  } catch (error) {
+    console.error('Error in guildMemberAdd event:', error);
+  }
+});
+
 // Message Endpoint
 app.post('/send-message', requireAuth, async (req, res) => {
   try {
