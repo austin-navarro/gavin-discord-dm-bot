@@ -1,27 +1,29 @@
 # Discord Bot with PostgreSQL
 
-A Discord bot that stores and manages conversations using PostgreSQL for data persistence.
+A Discord bot that stores and manages conversations using PostgreSQL for data persistence, featuring a web admin dashboard.
 
 ## Features
 
-- Discord direct message handling
-- Web dashboard for managing conversations
-- PostgreSQL database for message storage
-- Admin authentication for the dashboard
+- Discord direct message handling with complete message history
+- Web dashboard for viewing and replying to conversations
+- Proper timestamp handling in Pacific Standard Time (PST)
+- PostgreSQL database for reliable message storage
+- Admin authentication for dashboard security
+- Railway deployment support
 
 ## Tech Stack
 
 - Node.js
 - Express.js
-- Discord.js
+- Discord.js v14
 - PostgreSQL (via Neon.tech)
 - EJS templating engine
 
 ## Prerequisites
 
 - Node.js 16+
-- PostgreSQL database (we recommend [Neon](https://neon.tech/))
-- Discord Bot token
+- PostgreSQL database (recommend [Neon](https://neon.tech/))
+- Discord Bot token with proper intents enabled
 
 ## Environment Variables
 
@@ -63,7 +65,7 @@ This project uses a PostgreSQL database with the following schema:
 CREATE TABLE users (
   user_id TEXT PRIMARY KEY,
   username TEXT NOT NULL,
-  last_activity BIGINT,
+  last_activity BIGINT, -- Timestamp in milliseconds (epoch time)
   last_message TEXT
 );
 ```
@@ -75,40 +77,63 @@ CREATE TABLE messages (
   id SERIAL PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
   content TEXT NOT NULL,
-  timestamp BIGINT NOT NULL,
-  from_user BOOLEAN NOT NULL DEFAULT FALSE
+  timestamp BIGINT NOT NULL, -- Timestamp in milliseconds (epoch time)
+  from_user BOOLEAN NOT NULL DEFAULT FALSE,
+  
+  -- Index for efficient querying
+  CONSTRAINT user_message_timestamp UNIQUE(user_id, timestamp, content)
 );
 ```
 
+## Timestamp Handling
+
+The application handles timestamps consistently throughout:
+
+- All timestamps are stored as BIGINT in the database (milliseconds since epoch)
+- Discord message timestamps are captured using message.createdTimestamp
+- Timestamps are displayed in Pacific Standard Time (PST) format
+- The dashboard shows formatted timestamps for better readability
+- Invalid timestamps are automatically repaired during application startup
+
 ## Deployment
-
-For production deployment, we recommend:
-
-1. Hosting the bot on a service like Heroku, Railway, or Render
-2. Using Neon.tech for PostgreSQL hosting
-3. Setting up proper environment variables in your hosting platform
 
 ### Railway Deployment Instructions
 
-1. Create a Railway account at [railway.app](https://railway.app)
+1. Install the Railway CLI:
+   ```
+   npm install -g @railway/cli
+   ```
 
-2. Click "New Project" and select "Deploy from GitHub repo"
+2. Login to Railway:
+   ```
+   railway login
+   ```
+   Or for browserless environments:
+   ```
+   railway login --browserless
+   ```
 
-3. Connect your GitHub repository
+3. Link your project:
+   ```
+   railway link
+   ```
 
-4. Add the following environment variables in the Railway dashboard:
-   - `DISCORD_TOKEN` - Your Discord bot token
-   - `ADMIN_PASSWORD` - Password for admin dashboard access
-   - `SESSION_SECRET` - A long random string for session security
-   - `DATABASE_URL` - Your Neon PostgreSQL connection string
+4. Set your environment variables:
+   ```
+   railway variables set DISCORD_TOKEN=your_token ADMIN_PASSWORD=your_password ...
+   ```
 
-5. Railway will automatically deploy your app with the start command from package.json
+5. Deploy your application:
+   ```
+   railway up
+   ```
 
-6. Once deployed, you can access your web dashboard at the URL provided by Railway
+6. Create a domain for your application:
+   ```
+   railway domain
+   ```
 
-7. If you encounter a TokenInvalid error, verify your DISCORD_TOKEN is correct in Railway environment variables
-
-8. To debug, check the logs in the Railway dashboard
+7. Your web dashboard will be available at the provided domain URL.
 
 ## Development
 
@@ -116,14 +141,28 @@ The project structure:
 
 - `index.js` - Main application entry point
 - `database.js` - Database connection and operations
+- `setup.sql` - Database schema creation script
+- `health-check.js` - Health check endpoint for Railway
 - `views/` - EJS templates for the web dashboard
 - `backups/` - Backup of the original JSON data
 
 ## Troubleshooting
 
-If you encounter connection issues:
+### Database Issues
 
-1. Verify your PostgreSQL connection string in `.env`
-2. Check that your database is accessible from your hosting environment
-3. Ensure your Discord bot token is valid
-4. Check the console logs for specific error messages 
+- If you see "Invalid Date" errors, the application will automatically fix timestamp formats in the database
+- The `fixTimestamps()` function runs on startup to correct any invalid timestamp data
+
+### Deployment Issues
+
+- **Port conflicts**: The application handles port conflicts gracefully by using the PORT environment variable
+- **Discord connection**: Ensure your bot token has the proper intents enabled (Message Content, Server Members, etc.)
+- **Web dashboard access**: Use the admin password defined in the ADMIN_PASSWORD environment variable
+
+### Message Sending Issues
+
+If messages aren't sending:
+1. Check the Railway logs for specific error messages
+2. Verify the Discord token has proper permissions
+3. Ensure the bot can access DM channels
+4. Confirm the timestamp format in the database is correct 
