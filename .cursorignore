@@ -1,0 +1,31 @@
+# Ignore environment files
+.env
+.env.*
+!.env.example
+!.env.template
+
+# Ignore secret or private folders
+/secrets/
+/config/private/
+/keys/
+/credentials/
+
+# Ignore sensitive data
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+
+# Ignore dependency and build folders
+node_modules/
+dist/
+build/
+
+# Ignore database files
+*.sqlite
+*.db
+
+# Ignore backup files
+/backups/ 
